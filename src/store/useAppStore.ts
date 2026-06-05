@@ -27,6 +27,7 @@ interface AppStore {
 
   setRole: (role: Role) => void
   loadSampleData: () => void
+  onRoleSwitch: () => void
   updateCustomerInfo: (info: Partial<CustomerInfo>) => void
   addProcessingItem: (item: ProcessingItem) => void
   removeProcessingItem: (id: string) => void
@@ -58,19 +59,41 @@ export const useAppStore = create<AppStore>((set, get) => ({
   validationWarnings: [],
 
   setRole: (role) => {
+    const prevRole = get().role
     set({ role })
-    get().loadSampleData()
+    if (prevRole === null) {
+      get().loadSampleData()
+    } else {
+      get().onRoleSwitch()
+    }
   },
 
   loadSampleData: () => {
     const role = get().role
     if (!role) return
-    set((s) => ({
+    set({
       customerInfo: { ...SAMPLE_CUSTOMERS[0] },
       processingItems: SAMPLE_ITEMS_BY_ROLE[role].map((i) => ({ ...i })),
       signature: { ...SAMPLE_SIGNATURE_UNSIGNED },
       attachments: SAMPLE_ATTACHMENTS.map((a) => ({ ...a })),
       currentSubmission: null,
+      validationErrors: [],
+      validationWarnings: [],
+    })
+  },
+
+  onRoleSwitch: () => {
+    const role = get().role
+    if (!role) return
+    const currentSig = get().signature
+    const currentAtts = get().attachments
+    const currentItems = get().processingItems
+    const baseItems = SAMPLE_ITEMS_BY_ROLE[role].map((i) => ({ ...i }))
+    const mergedItems = currentItems.length > 0 ? currentItems : baseItems
+    set((s) => ({
+      processingItems: mergedItems,
+      signature: currentSig ?? { ...SAMPLE_SIGNATURE_UNSIGNED },
+      attachments: currentAtts.length > 0 ? currentAtts : SAMPLE_ATTACHMENTS.map((a) => ({ ...a })),
       validationErrors: [],
       validationWarnings: [],
     }))

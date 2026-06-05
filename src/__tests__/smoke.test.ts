@@ -154,4 +154,49 @@ describe('模拟离线提交并验证待同步列表增加', () => {
 
     await clearAllData()
   })
+
+  it('客户签名后切回柜员，签名状态保留并能成功离线提交到待同步列表', async () => {
+    const { useAppStore } = await import('@/store/useAppStore')
+    const { getAllPendingSync, clearAllData, resetDBInstance } = await import('@/lib/db')
+
+    resetDBInstance()
+    await clearAllData()
+
+    useAppStore.getState().setOnline(false)
+
+    useAppStore.getState().setRole('teller')
+    expect(useAppStore.getState().role).toBe('teller')
+    expect(useAppStore.getState().signature?.status).toBe('unsigned')
+    expect(useAppStore.getState().processingItems.length).toBeGreaterThan(0)
+
+    useAppStore.getState().setRole('customer')
+    expect(useAppStore.getState().role).toBe('customer')
+    expect(useAppStore.getState().signature?.status).toBe('unsigned')
+
+    useAppStore.getState().setSignature(SIGNED_SIGNATURE)
+    expect(useAppStore.getState().signature?.status).toBe('signed')
+
+    const beforeSwitchCount = useAppStore.getState().pendingSyncList.length
+
+    useAppStore.getState().setRole('teller')
+    expect(useAppStore.getState().role).toBe('teller')
+    expect(useAppStore.getState().signature?.status).toBe('signed')
+
+    const result = useAppStore.getState().validateAndSubmit()
+    expect(result.success).toBe(true)
+
+    const afterCount = useAppStore.getState().pendingSyncList.length
+    expect(afterCount).toBe(beforeSwitchCount + 1)
+
+    const latest = useAppStore.getState().pendingSyncList[afterCount - 1]
+    expect(latest.ticketNo).toMatch(/^TK/)
+    expect(latest.payload.signature.status).toBe('signed')
+    expect(latest.payload.submittedBy).toBe('teller')
+    expect(latest.payload.status).toBe('submitted')
+
+    const persisted = await getAllPendingSync()
+    expect(persisted.length).toBe(afterCount)
+
+    await clearAllData()
+  })
 })
