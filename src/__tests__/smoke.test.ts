@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto'
-import { validateSubmission, checkAttachmentSize } from '@/lib/validators'
+import { validateSubmission, checkAttachmentSize, validateStatusChange } from '@/lib/validators'
 import type { SignatureData, AttachmentPhoto, ProcessingItem } from '@/types'
 import { describe, expect, it, beforeEach } from 'vitest'
 
@@ -197,6 +197,264 @@ describe('模拟离线提交并验证待同步列表增加', () => {
     const persisted = await getAllPendingSync()
     expect(persisted.length).toBe(afterCount)
 
+    await clearAllData()
+  })
+})
+
+describe('附件过大要提示压缩作为状态变更前置条件', () => {
+  const LARGE_ATTACHMENT: AttachmentPhoto = {
+    id: 'att-large',
+    name: 'big_file.jpg',
+    size: 6 * 1024 * 1024,
+    type: 'image/jpeg',
+    dataUrl: '',
+    compressed: false,
+    originalSize: 6 * 1024 * 1024,
+  }
+
+  const MEDIUM_ATTACHMENT: AttachmentPhoto = {
+    id: 'att-medium',
+    name: 'medium_file.jpg',
+    size: 4 * 1024 * 1024,
+    type: 'image/jpeg',
+    dataUrl: '',
+    compressed: false,
+    originalSize: 4 * 1024 * 1024,
+  }
+
+  const SMALL_ATTACHMENT: AttachmentPhoto = {
+    id: 'att-small',
+    name: 'small_file.jpg',
+    size: 1 * 1024 * 1024,
+    type: 'image/jpeg',
+    dataUrl: '',
+    compressed: false,
+    originalSize: 1 * 1024 * 1024,
+  }
+
+  const COMPRESSED_LARGE_ATTACHMENT: AttachmentPhoto = {
+    ...LARGE_ATTACHMENT,
+    size: 2 * 1024 * 1024,
+    compressed: true,
+  }
+
+  it('validateStatusChange: 附件过大应返回错误，阻止状态变更', () => {
+    const result = validateStatusChange([LARGE_ATTACHMENT])
+    expect(result.valid).toBe(false)
+    expect(result.errors).toEqual(
+      expect.arrayContaining([expect.stringContaining('过大')])
+    )
+    expect(result.errors).toEqual(
+      expect.arrayContaining([expect.stringContaining('请先压缩后再进行状态变更')])
+    )
+  })
+
+  it('validateStatusChange: 附件较大应返回警告，但不阻止状态变更', () => {
+    const result = validateStatusChange([MEDIUM_ATTACHMENT])
+    expect(result.valid).toBe(true)
+    expect(result.errors.length).toBe(0)
+    expect(result.warnings.length).toBeGreaterThan(0)
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining('较大')])
+    )
+  })
+
+  it('validateStatusChange: 正常大小附件应通过验证', () => {
+    const result = validateStatusChange([SMALL_ATTACHMENT])
+    expect(result.valid).toBe(true)
+    expect(result.errors.length).toBe(0)
+    expect(result.warnings.length).toBe(0)
+  })
+
+  it('validateStatusChange: 压缩后的附件应通过验证', () => {
+    const result = validateStatusChange([COMPRESSED_LARGE_ATTACHMENT])
+    expect(result.valid).toBe(true)
+    expect(result.errors.length).toBe(0)
+  })
+
+  it('validateStatusChange: 混合附件中只要有一个过大就应阻止状态变更', () => {
+    const result = validateStatusChange([SMALL_ATTACHMENT, LARGE_ATTACHMENT, MEDIUM_ATTACHMENT])
+    expect(result.valid).toBe(false)
+    expect(result.errors.length).toBeGreaterThan(0)
+    expect(result.errors).toEqual(
+      expect.arrayContaining([expect.stringContaining('big_file.jpg')])
+    )
+  })
+
+  it('validateSubmission 复用 validateStatusChange 确保提交也检查附件大小', () => {
+    const submissionResult = validateSubmission(SIGNED_SIGNATURE, [LARGE_ATTACHMENT], SAMPLE_ITEMS)
+    const statusResult = validateStatusChange([LARGE_ATTACHMENT])
+    
+    expect(submissionResult.valid).toBe(false)
+    expect(statusResult.valid).toBe(false)
+    expect(submissionResult.errors).toEqual(
+      expect.arrayContaining(statusResult.errors)
+    )
+  })
+
+  it('store.updateProcessingItemStatus: 附件过大时不能更新办理事项状态', async () => {
+    const { useAppStore } = await import('@/store/useAppStore')
+    const { resetDBInstance, clearAllData } = await import('@/lib/db')
+    
+    resetDBInstance()
+    await clearAllData()
+    
+    useAppStore.getState().reset()
+    useAppStore.getState().setRole('supervisor')
+    
+    const items = useAppStore.getState().processingItems
+    expect(items.length).toBeGreaterThan(0)
+    
+    const firstItemId = items[0].id
+    const initialStatus = items[0].status
+    
+    const initialAttachmentCount = useAppStore.getState().attachments.length
+    useAppStore.getState().addAttachment(LARGE_ATTACHMENT)
+    expect(useAppStore.getState().attachments.length).toBe(initialAttachmentCount + 1)
+    
+    const hasLargeAttachment = useAppStore.getState().attachments.some(a => a.size > 5 * 1024 * 1024)
+    expect(hasLargeAttachment).toBe(true)
+    
+    const result = useAppStore.getState().updateProcessingItemStatus(firstItemId, 'completed')
+    
+    expect(result.success).toBe(false)
+    expect(result.errors.length).toBeGreaterThan(0)
+    expect(result.errors).toEqual(
+      expect.arrayContaining([expect.stringContaining('过大')])
+    )
+    
+    const updatedItem = useAppStore.getState().processingItems.find(i => i.id === firstItemId)
+    expect(updatedItem?.status).toBe(initialStatus)
+    
+    expect(useAppStore.getState().validationErrors.length).toBeGreaterThan(0)
+    expect(useAppStore.getState().validationErrors).toEqual(
+      expect.arrayContaining([expect.stringContaining('请先压缩后再进行状态变更')])
+    )
+    
+    await clearAllData()
+  })
+
+  it('store.updateProcessingItemStatus: 附件正常时可以更新办理事项状态', async () => {
+    const { useAppStore } = await import('@/store/useAppStore')
+    const { resetDBInstance, clearAllData } = await import('@/lib/db')
+    
+    resetDBInstance()
+    await clearAllData()
+    
+    useAppStore.getState().reset()
+    useAppStore.getState().setRole('supervisor')
+    
+    const items = useAppStore.getState().processingItems
+    const firstItemId = items[0].id
+    
+    useAppStore.getState().addAttachment(SMALL_ATTACHMENT)
+    
+    const result = useAppStore.getState().updateProcessingItemStatus(firstItemId, 'completed')
+    
+    expect(result.success).toBe(true)
+    expect(result.errors.length).toBe(0)
+    
+    const updatedItem = useAppStore.getState().processingItems.find(i => i.id === firstItemId)
+    expect(updatedItem?.status).toBe('completed')
+    
+    expect(useAppStore.getState().validationErrors.length).toBe(0)
+    
+    await clearAllData()
+  })
+
+  it('store.approveSubmission: 附件过大时不能审批通过', async () => {
+    const { useAppStore } = await import('@/store/useAppStore')
+    const { resetDBInstance, clearAllData } = await import('@/lib/db')
+    
+    resetDBInstance()
+    await clearAllData()
+    
+    useAppStore.getState().reset()
+    useAppStore.getState().setRole('teller')
+    useAppStore.getState().setSignature(SIGNED_SIGNATURE)
+    useAppStore.getState().addAttachment(SMALL_ATTACHMENT)
+    
+    const submitResult = useAppStore.getState().validateAndSubmit()
+    expect(submitResult.success).toBe(true)
+    
+    const submissionId = useAppStore.getState().submissions[0]?.id
+    expect(submissionId).toBeDefined()
+    
+    useAppStore.getState().addAttachment(LARGE_ATTACHMENT)
+    
+    const approveResult = useAppStore.getState().approveSubmission(submissionId)
+    
+    expect(approveResult.success).toBe(false)
+    expect(approveResult.errors.length).toBeGreaterThan(0)
+    expect(approveResult.errors).toEqual(
+      expect.arrayContaining([expect.stringContaining('过大')])
+    )
+    
+    expect(useAppStore.getState().validationErrors.length).toBeGreaterThan(0)
+    
+    await clearAllData()
+  })
+
+  it('键盘操作提交时也会检查附件大小', async () => {
+    const { useAppStore } = await import('@/store/useAppStore')
+    const { resetDBInstance, clearAllData } = await import('@/lib/db')
+    
+    resetDBInstance()
+    await clearAllData()
+    
+    useAppStore.getState().reset()
+    useAppStore.getState().setRole('teller')
+    useAppStore.getState().setSignature(SIGNED_SIGNATURE)
+    
+    const initialAttachmentCount = useAppStore.getState().attachments.length
+    useAppStore.getState().addAttachment(LARGE_ATTACHMENT)
+    expect(useAppStore.getState().attachments.length).toBe(initialAttachmentCount + 1)
+    
+    const hasLargeAttachment = useAppStore.getState().attachments.some(a => a.size > 5 * 1024 * 1024)
+    expect(hasLargeAttachment).toBe(true)
+    
+    const submitResult = useAppStore.getState().validateAndSubmit()
+    
+    expect(submitResult.success).toBe(false)
+    expect(submitResult.errors).toEqual(
+      expect.arrayContaining([expect.stringContaining('过大')])
+    )
+    
+    expect(useAppStore.getState().currentSubmission).toBeNull()
+    expect(useAppStore.getState().attachments.length).toBeGreaterThan(initialAttachmentCount)
+    
+    await clearAllData()
+  })
+
+  it('附件过大时压缩后可以正常提交和状态变更', async () => {
+    const { useAppStore } = await import('@/store/useAppStore')
+    const { resetDBInstance, clearAllData } = await import('@/lib/db')
+    
+    resetDBInstance()
+    await clearAllData()
+    
+    useAppStore.getState().reset()
+    useAppStore.getState().setRole('teller')
+    useAppStore.getState().setSignature(SIGNED_SIGNATURE)
+    
+    const existingAttachments = useAppStore.getState().attachments
+    existingAttachments.forEach(att => {
+      useAppStore.getState().removeAttachment(att.id)
+    })
+    
+    useAppStore.getState().addAttachment(LARGE_ATTACHMENT)
+    expect(useAppStore.getState().attachments.length).toBe(1)
+    
+    let submitResult = useAppStore.getState().validateAndSubmit()
+    expect(submitResult.success).toBe(false)
+    
+    const attId = useAppStore.getState().attachments[0].id
+    useAppStore.getState().compressAttachment(attId, 'data:image/jpeg;base64,compressed', 2 * 1024 * 1024)
+    
+    submitResult = useAppStore.getState().validateAndSubmit()
+    expect(submitResult.success).toBe(true)
+    expect(useAppStore.getState().currentSubmission).not.toBeNull()
+    
     await clearAllData()
   })
 })

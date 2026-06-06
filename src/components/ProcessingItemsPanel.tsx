@@ -1,6 +1,6 @@
 import { useAppStore } from '@/store/useAppStore'
 import { ROLE_PERMISSIONS, type ProcessingItem } from '@/types'
-import { ClipboardList, Plus, Trash2, ChevronRight } from 'lucide-react'
+import { ClipboardList, Plus, Trash2, ChevronRight, AlertTriangle } from 'lucide-react'
 import { useState } from 'react'
 
 const STATUS_LABELS: Record<ProcessingItem['status'], { text: string; color: string }> = {
@@ -17,9 +17,11 @@ export default function ProcessingItemsPanel() {
   const addProcessingItem = useAppStore((s) => s.addProcessingItem)
   const removeProcessingItem = useAppStore((s) => s.removeProcessingItem)
   const updateProcessingItemStatus = useAppStore((s) => s.updateProcessingItemStatus)
+  const validationErrors = useAppStore((s) => s.validationErrors)
   const [adding, setAdding] = useState(false)
   const [newCategory, setNewCategory] = useState(ITEM_CATEGORIES[0])
   const [newDesc, setNewDesc] = useState('')
+  const [localError, setLocalError] = useState<string | null>(null)
 
   if (!role) return null
 
@@ -58,6 +60,13 @@ export default function ProcessingItemsPanel() {
           </button>
         )}
       </div>
+
+      {localError && (
+        <div className="px-4 py-2 bg-red-50 border-b border-red-100 flex items-center gap-2 text-xs text-red-600">
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+          {localError}
+        </div>
+      )}
 
       {adding && (
         <div className="px-4 py-3 border-b border-slate-100 bg-blue-50/50 space-y-2">
@@ -100,7 +109,13 @@ export default function ProcessingItemsPanel() {
               </div>
               {canApprove && item.status === 'pending' && (
                 <button
-                  onClick={() => updateProcessingItemStatus(item.id, 'completed')}
+                  onClick={() => {
+                    const result = updateProcessingItemStatus(item.id, 'completed')
+                    if (!result.success) {
+                      setLocalError(result.errors.join('；'))
+                      setTimeout(() => setLocalError(null), 5000)
+                    }
+                  }}
                   className="text-xs text-green-600 hover:text-green-700 flex items-center gap-0.5 shrink-0"
                 >
                   审批通过

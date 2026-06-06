@@ -12,6 +12,21 @@ export interface ValidationResult {
   warnings: string[]
 }
 
+export function validateStatusChange(attachments: AttachmentPhoto[]): ValidationResult {
+  const errors: string[] = []
+  const warnings: string[] = []
+
+  for (const att of attachments) {
+    if (att.size > MAX_ATTACHMENT_SIZE) {
+      errors.push(`附件"${att.name}"过大(${formatSize(att.size)})，超过5MB限制，请先压缩后再进行状态变更`)
+    } else if (att.size > COMPRESS_THRESHOLD && !att.compressed) {
+      warnings.push(`附件"${att.name}"较大(${formatSize(att.size)})，建议压缩后再进行状态变更`)
+    }
+  }
+
+  return { valid: errors.length === 0, errors, warnings }
+}
+
 export function validateSubmission(
   signature: SignatureData | null,
   attachments: AttachmentPhoto[],
@@ -28,13 +43,9 @@ export function validateSubmission(
     errors.push('办理事项不能为空：请至少添加一个办理事项')
   }
 
-  for (const att of attachments) {
-    if (att.size > MAX_ATTACHMENT_SIZE) {
-      errors.push(`附件"${att.name}"过大(${formatSize(att.size)})，超过5MB限制，请压缩后重新上传`)
-    } else if (att.size > COMPRESS_THRESHOLD && !att.compressed) {
-      warnings.push(`附件"${att.name}"较大(${formatSize(att.size)})，建议压缩后再提交`)
-    }
-  }
+  const statusValidation = validateStatusChange(attachments)
+  errors.push(...statusValidation.errors)
+  warnings.push(...statusValidation.warnings)
 
   return { valid: errors.length === 0, errors, warnings }
 }

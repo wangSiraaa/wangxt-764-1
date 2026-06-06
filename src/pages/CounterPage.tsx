@@ -1,5 +1,5 @@
 import { useAppStore } from '@/store/useAppStore'
-import { ROLE_PERMISSIONS } from '@/types'
+import { ROLE_PERMISSIONS, MAX_ATTACHMENT_SIZE } from '@/types'
 import Layout from '@/components/Layout'
 import CustomerInfoPanel from '@/components/CustomerInfoPanel'
 import ProcessingItemsPanel from '@/components/ProcessingItemsPanel'
@@ -7,8 +7,9 @@ import SignaturePanel from '@/components/SignaturePanel'
 import AttachmentPanel from '@/components/AttachmentPanel'
 import SubmissionResultPanel from '@/components/SubmissionResultPanel'
 import PendingSyncList from '@/components/PendingSyncList'
-import { Send, Wifi, WifiOff, AlertTriangle, CheckCircle } from 'lucide-react'
-import { useState, useEffect } from 'react'
+import KeyboardHelp from '@/components/KeyboardHelp'
+import { Send, Wifi, WifiOff, AlertTriangle, CheckCircle, Keyboard } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
 
 export default function CounterPage() {
   const role = useAppStore((s) => s.role)
@@ -19,8 +20,11 @@ export default function CounterPage() {
   const currentSubmission = useAppStore((s) => s.currentSubmission)
   const validationErrors = useAppStore((s) => s.validationErrors)
   const validationWarnings = useAppStore((s) => s.validationWarnings)
+  const attachments = useAppStore((s) => s.attachments)
   const [showSuccess, setShowSuccess] = useState(false)
   const [submitAttempted, setSubmitAttempted] = useState(false)
+  const [showKeyboardHelp, setShowKeyboardHelp] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     const handleOnline = () => setOnline(true)
@@ -33,6 +37,46 @@ export default function CounterPage() {
     }
   }, [setOnline])
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        switch (e.key.toLowerCase()) {
+          case 's':
+            e.preventDefault()
+            if (canSubmit) {
+              handleSubmit()
+            }
+            break
+          case 'k':
+            e.preventDefault()
+            setShowKeyboardHelp((prev) => !prev)
+            break
+          case 'u':
+            e.preventDefault()
+            if (ROLE_PERMISSIONS[role!]?.includes('upload_attachment')) {
+              fileInputRef.current?.click()
+            }
+            break
+        }
+      }
+      if (e.key === 'Escape') {
+        setShowKeyboardHelp(false)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [canSubmit, role])
+
+  const checkLargeAttachments = (): string[] => {
+    const issues: string[] = []
+    for (const att of attachments) {
+      if (att.size > MAX_ATTACHMENT_SIZE) {
+        issues.push(`附件"${att.name}"过大，超过5MB限制，请先压缩后再进行状态变更`)
+      }
+    }
+    return issues
+  }
+
   if (!role) return null
 
   const canSubmit = ROLE_PERMISSIONS[role].includes('submit')
@@ -41,6 +85,10 @@ export default function CounterPage() {
 
   const handleSubmit = () => {
     setSubmitAttempted(true)
+    const attachmentIssues = checkLargeAttachments()
+    if (attachmentIssues.length > 0) {
+      return
+    }
     const result = validateAndSubmit()
     if (result.success) {
       setShowSuccess(true)
@@ -127,7 +175,20 @@ export default function CounterPage() {
             {isOnline ? '模拟断网（测试离线提交）' : '模拟恢复网络（测试同步）'}
           </button>
         </div>
+
+        <div className="pt-2">
+          <button
+            onClick={() => setShowKeyboardHelp(true)}
+            className="w-full py-2 rounded-lg text-xs font-medium border border-slate-200 text-slate-600 bg-slate-50 hover:bg-slate-100 flex items-center justify-center gap-2 transition-colors"
+          >
+            <Keyboard className="w-3.5 h-3.5" />
+            键盘操作 (Ctrl+K)
+          </button>
+        </div>
       </div>
+
+      <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden" />
+      <KeyboardHelp show={showKeyboardHelp} onClose={() => setShowKeyboardHelp(false)} />
     </Layout>
   )
 }

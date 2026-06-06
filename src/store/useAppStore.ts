@@ -8,7 +8,7 @@ import type {
   SubmissionResult,
   PendingSyncItem,
 } from '@/types'
-import { validateSubmission } from '@/lib/validators'
+import { validateSubmission, validateStatusChange } from '@/lib/validators'
 import { addPendingSync, removePendingSync, getAllPendingSync, saveSubmission, getAllSubmissions } from '@/lib/db'
 import { SAMPLE_CUSTOMERS, SAMPLE_ITEMS_BY_ROLE, SAMPLE_SIGNATURE_UNSIGNED, SAMPLE_ATTACHMENTS } from '@/data/sampleData'
 
@@ -24,6 +24,7 @@ interface AppStore {
   currentSubmission: SubmissionResult | null
   validationErrors: string[]
   validationWarnings: string[]
+  keyboardShortcutsEnabled: boolean
 
   setRole: (role: Role) => void
   loadSampleData: () => void
@@ -31,7 +32,7 @@ interface AppStore {
   updateCustomerInfo: (info: Partial<CustomerInfo>) => void
   addProcessingItem: (item: ProcessingItem) => void
   removeProcessingItem: (id: string) => void
-  updateProcessingItemStatus: (id: string, status: ProcessingItem['status']) => void
+  updateProcessingItemStatus: (id: string, status: ProcessingItem['status']) => { success: boolean; errors: string[] }
   setSignature: (signature: SignatureData) => void
   addAttachment: (att: AttachmentPhoto) => void
   removeAttachment: (id: string) => void
@@ -40,9 +41,11 @@ interface AppStore {
   validateAndSubmit: () => { success: boolean; errors: string[]; warnings: string[] }
   syncPendingItems: () => Promise<void>
   loadPersistedData: () => Promise<void>
-  approveSubmission: (id: string) => void
+  approveSubmission: (id: string) => { success: boolean; errors: string[] }
   rejectSubmission: (id: string) => void
   reset: () => void
+  checkAttachmentSizeForStatusChange: () => string[]
+  toggleKeyboardShortcuts: () => void
 }
 
 export const useAppStore = create<AppStore>((set, get) => ({
@@ -57,6 +60,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   currentSubmission: null,
   validationErrors: [],
   validationWarnings: [],
+  keyboardShortcutsEnabled: true,
 
   setRole: (role) => {
     const prevRole = get().role
@@ -114,9 +118,16 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
 
   updateProcessingItemStatus: (id, status) => {
+    const errors = get().checkAttachmentSizeForStatusChange()
+    if (errors.length > 0) {
+      set({ validationErrors: errors })
+      return { success: false, errors }
+    }
     set((s) => ({
       processingItems: s.processingItems.map((i) => (i.id === id ? { ...i, status } : i)),
+      validationErrors: [],
     }))
+    return { success: true, errors: [] }
   },
 
   setSignature: (signature) => {
@@ -213,12 +224,19 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
 
   approveSubmission: (id) => {
+    const errors = get().checkAttachmentSizeForStatusChange()
+    if (errors.length > 0) {
+      set({ validationErrors: errors })
+      return { success: false, errors }
+    }
     set((s) => ({
       submissions: s.submissions.map((sub) =>
         sub.id === id ? { ...sub, status: 'synced' as const } : sub,
       ),
       processingItems: s.processingItems.map((i) => ({ ...i, status: 'completed' as const })),
+      validationErrors: [],
     }))
+    return { success: true, errors: [] }
   },
 
   rejectSubmission: (id) => {
@@ -227,6 +245,16 @@ export const useAppStore = create<AppStore>((set, get) => ({
         sub.id === id ? { ...sub, status: 'failed' as const } : sub,
       ),
     }))
+  },
+
+  checkAttachmentSizeForStatusChange: () => {
+    const { attachments } = get()
+    const result = validateStatusChange(attachments)
+    return result.errors
+  },
+
+  toggleKeyboardShortcuts: () => {
+    set((s) => ({ keyboardShortcutsEnabled: !s.keyboardShortcutsEnabled }))
   },
 
   reset: () => {
